@@ -1,7 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"github.com/amos-babu/user-auth/api"
+	"github.com/gorilla/mux"
+)
 
 func main() {
-	fmt.Println("Hello, World!")
+	mux := mux.NewRouter()
+	apiServer := &api.Server{}
+	apiServer.RegisterRoutes()
 }
