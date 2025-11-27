@@ -1,8 +1,12 @@
 package types
 
-// User represents a user in the system.
+import "time"
+
 type User struct {
-	ID    string
-	Email string
-	Name  string
+	ID        string
+	Email     string
+	Name      string
+	Age       int
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

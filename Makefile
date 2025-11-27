@@ -1,5 +1,5 @@
 build:
-	@go build -o bin/userauth
+	@go build -o bin/userauth ./cmd
 
 run: build
 	@./bin/userauth
