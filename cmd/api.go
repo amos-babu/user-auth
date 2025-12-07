@@ -10,6 +10,11 @@ import (
 
 type ApiServer struct {
 	listenAddr string
+	config     Config
+}
+
+type Config struct {
+	cfg string
 }
 
 func NewApiServer(listenAddr string) *ApiServer {
