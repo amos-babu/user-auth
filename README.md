@@ -5,7 +5,7 @@
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg?style=for-the-badge)]()
 [![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker)](https://www.docker.com/)
 
-A high-performance, production-ready **Authentication and Authorization Service** built with Go, PostgreSQL, and Redis. AuthSphere provides robust JWT-based authentication featuring **stateless short-lived Access Tokens**, **secure HttpOnly cookie-based Refresh Tokens**, blacklisting/revocation support, and role-based protected routes.
+A high-performance, production-ready **Authentication and Authorization Service** built with Go, PostgreSQL. AuthSphere provides robust JWT-based authentication featuring **stateless short-lived Access Tokens**, **secure HttpOnly cookie-based Refresh Tokens**, blacklisting/revocation support, and role-based protected routes.
 
 ---
 
