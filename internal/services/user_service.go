@@ -1,0 +1,231 @@
+package services
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"relay/internal/domain"
+	"relay/internal/models"
+	"relay/internal/repositories"
+	"relay/internal/token"
+	"relay/internal/validation"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+type UserService struct {
+	users        repositories.UserRepository
+	refreshToken repositories.RefreshTokenRepository
+	tokenService *token.Service
+}
+
+type LoginResult struct {
+	User         *models.User
+	AccessToken  string
+	RefreshToken string
+}
+
+type RefreshResult struct {
+	AccessToken  string
+	RefreshToken string
+}
+
+const RefreshTokenTTL = 30 * 24 * time.Hour
+
+func NewUserService(
+	users repositories.UserRepository,
+	tokenService *token.Service,
+	refreshToken repositories.RefreshTokenRepository,
+) *UserService {
+	return &UserService{
+		users:        users,
+		refreshToken: refreshToken,
+		tokenService: tokenService,
+	}
+}
+
+func (s *UserService) Register(ctx context.Context, name string, email string, password string) (*models.User, error) {
+	// validation
+	if err := validation.ValidateRegistraion(name, email, password); err != nil {
+		return nil, err
+	}
+
+	// normalize email
+	email = strings.TrimSpace(strings.ToLower(email))
+	name = strings.TrimSpace(name)
+
+	// hash password
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+
+	// create user
+	user := &models.User{
+		Name:         name,
+		Email:        email,
+		PasswordHash: string(hash),
+	}
+
+	// save user
+	if err := s.users.Create(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func (s *UserService) Login(ctx context.Context, email string, password string) (*LoginResult, error) {
+	// validation
+	if err := validation.ValidateLogin(email, password); err != nil {
+		return nil, err
+	}
+
+	// normalize email
+	email = strings.TrimSpace(strings.ToLower(email))
+
+	// find the user by calling repository
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			return nil, domain.ErrInvalidCredentials
+		}
+
+		return nil, err
+	}
+
+	//compared hashed stored password with password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return nil, domain.ErrInvalidCredentials
+	}
+
+	//Call helper function for accessToken and refreshToken
+	accessToken, refreshToken, err := s.issueTokens(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	//return user in a new loginresult struct
+	return &LoginResult{
+		User:         user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}, nil
+}
+
+func (s *UserService) Profile(ctx context.Context, userID int64) (*models.User, error) {
+	return s.users.GetByID(ctx, userID)
+}
+
+func (s *UserService) Refresh(ctx context.Context, refreshToken string) (*RefreshResult, error) {
+	sum := sha256.Sum256([]byte(refreshToken))
+	hash := hex.EncodeToString(sum[:])
+
+	//call the repository to look it up
+	refresh, err := s.refreshToken.GetByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+			return nil, domain.ErrInvalidRefreshToken
+		}
+		return nil, err
+	}
+
+	//check if revoked
+	if refresh.RevokedAt != nil {
+		return nil, domain.ErrInvalidRefreshToken
+	}
+
+	//check for expiration
+	if time.Now().After(refresh.ExpiresAt) {
+		return nil, domain.ErrInvalidRefreshToken
+	}
+
+	// Load the user
+	user, err := s.users.GetByID(ctx, refresh.UserID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			return nil, domain.ErrInvalidRefreshToken
+		}
+		return nil, err
+	}
+
+	// Issue a new pair of tokens
+	accessToken, newRefreshToken, err := s.issueTokens(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Revoke the old refresh token
+	if err := s.refreshToken.Revoke(ctx, refresh.ID); err != nil {
+		return nil, err
+	}
+
+	// Return the result
+	return &RefreshResult{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+	}, nil
+}
+
+func (s *UserService) issueTokens(ctx context.Context, userID int64) (accessToken string, refreshToken string, err error) {
+
+	//Generate access token from the TokenService
+	accessToken, err = s.tokenService.GenerateAccessToken(userID)
+	if err != nil {
+		return "", "", err
+	}
+
+	//Generate refresh token from the TokenService
+	refreshToken, err = s.tokenService.GenerateRefreshToken()
+	if err != nil {
+		return "", "", err
+	}
+
+	//Hash the refresh token using SHA-256 and Convert to string
+	hash := s.hashRefreshToken(refreshToken)
+
+	//Build the model
+	refresh := &models.RefreshToken{
+		UserID:    userID,
+		TokenHash: hash,
+		ExpiresAt: time.Now().Add(RefreshTokenTTL),
+	}
+
+	//Save the model
+	if err := s.refreshToken.Create(ctx, refresh); err != nil {
+		return "", "", err
+	}
+
+	return accessToken, refreshToken, nil
+}
+
+func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
+	hash := s.hashRefreshToken(refreshToken)
+
+	refresh, err := s.refreshToken.GetByHash(ctx, hash)
+
+	if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+			return nil
+		}
+
+		return err
+	}
+
+	if refresh.RevokedAt != nil {
+		return nil
+	}
+
+	return s.refreshToken.Revoke(ctx, refresh.ID)
+}
+
+// Helper function to hashing
+func (s *UserService) hashRefreshToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}

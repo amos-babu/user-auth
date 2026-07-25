@@ -1,0 +1,339 @@
+package handlers
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"relay/internal/domain"
+	"relay/internal/middleware"
+	"relay/internal/response"
+	"relay/internal/services"
+	"time"
+)
+
+type UserHandler struct {
+	service *services.UserService
+}
+
+func NewUserHandler(service *services.UserService) *UserHandler {
+	return &UserHandler{
+		service: service,
+	}
+}
+
+type RegisterRequest struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type RegisterResponse struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type UserResponse struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+type LoginResponse struct {
+	AccessToken string       `json:"accessToken"`
+	User        UserResponse `json:"user"`
+}
+
+type RefreshResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
+const refreshCookieName = "refresh_token" //__Host-refresh_token
+
+func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req RegisterRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if encodeErr := response.JSON(w, http.StatusBadRequest, response.ErrorResponse{
+			Error: "invalid request body",
+		}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+
+		return
+	}
+
+	user, err := h.service.Register(
+		r.Context(),
+		req.Name,
+		req.Email,
+		req.Password,
+	)
+
+	if err != nil {
+		if errors.Is(err, domain.ErrEmailAlreadyExists) {
+			if encodeErr := response.JSON(w, http.StatusConflict, response.ErrorResponse{
+				Error: "email already exists",
+			}); encodeErr != nil {
+				log.Printf("failed to encode response: %v", encodeErr)
+			}
+			return
+		}
+
+		if encodeErr := response.JSON(w, http.StatusInternalServerError, response.ErrorResponse{
+			Error: "internal server error",
+		}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+
+		return
+	}
+
+	resp := RegisterResponse{
+		ID:    user.ID,
+		Name:  user.Name,
+		Email: user.Email,
+	}
+
+	if err := response.JSON(
+		w,
+		http.StatusCreated,
+		resp,
+	); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
+
+}
+
+func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if encodeErr := response.JSON(w, http.StatusBadRequest, response.ErrorResponse{
+			Error: "invalid request body",
+		}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	result, err := h.service.Login(
+		r.Context(),
+		req.Email,
+		req.Password,
+	)
+
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			if encodeErr := response.JSON(w, http.StatusUnauthorized, response.ErrorResponse{
+				Error: "invalid email or password",
+			}); encodeErr != nil {
+				log.Printf("failed to encode response: %v", encodeErr)
+			}
+			return
+		}
+
+		if encodeErr := response.JSON(w, http.StatusInternalServerError, response.ErrorResponse{
+			Error: "internal server error",
+		}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	h.setRefreshCookie(w, result.RefreshToken)
+
+	resp := LoginResponse{
+		AccessToken: result.AccessToken,
+		User: UserResponse{
+			ID:    result.User.ID,
+			Name:  result.User.Name,
+			Email: result.User.Email,
+		},
+	}
+
+	if err := response.JSON(
+		w,
+		http.StatusOK,
+		resp,
+	); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
+
+}
+
+func (h *UserHandler) Profile(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		if encodeErr := response.JSON(
+			w,
+			http.StatusUnauthorized,
+			response.ErrorResponse{
+				Error: "unauthorized",
+			}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	user, err := h.service.Profile(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			if encodeErr := response.JSON(
+				w,
+				http.StatusNotFound,
+				response.ErrorResponse{
+					Error: "user not found",
+				}); encodeErr != nil {
+				log.Printf("failed to encode response: %v", encodeErr)
+			}
+			return
+		}
+		if encodeErr := response.JSON(
+			w,
+			http.StatusInternalServerError,
+			response.ErrorResponse{
+				Error: "internal server error",
+			}); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	resp := UserResponse{
+		ID:    user.ID,
+		Name:  user.Name,
+		Email: user.Email,
+	}
+
+	if encodeErr := response.JSON(
+		w,
+		http.StatusOK,
+		resp,
+	); encodeErr != nil {
+		log.Printf("failed to encode response: %v", encodeErr)
+	}
+}
+
+func (h *UserHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Cookie header: %q", r.Header.Get("Cookie"))
+	cookie, err := r.Cookie(refreshCookieName)
+	if err != nil {
+		if encodeErr := response.JSON(
+			w,
+			http.StatusUnauthorized,
+			response.ErrorResponse{
+				Error: "unauthorized",
+			},
+		); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	result, err := h.service.Refresh(
+		r.Context(),
+		cookie.Value,
+	)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidRefreshToken) {
+			h.clearRefreshCookie(w)
+			if encodeErr := response.JSON(
+				w,
+				http.StatusUnauthorized,
+				response.ErrorResponse{
+					Error: "invalid refresh token",
+				},
+			); encodeErr != nil {
+				log.Printf("failed to encode response: %v", encodeErr)
+			}
+			return
+		}
+		if encodeErr := response.JSON(
+			w,
+			http.StatusInternalServerError,
+			response.ErrorResponse{
+				Error: "internal server error",
+			},
+		); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+
+		return
+
+	}
+
+	h.setRefreshCookie(w, result.RefreshToken)
+
+	if encodeErr := response.JSON(
+		w,
+		http.StatusOK,
+		RefreshResponse{
+			AccessToken: result.AccessToken,
+		},
+	); encodeErr != nil {
+		log.Printf("failed to encode response: %v", encodeErr)
+	}
+
+}
+
+func (h *UserHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(refreshCookieName)
+	if err != nil {
+		h.clearRefreshCookie(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	err = h.service.Logout(
+		r.Context(),
+		cookie.Value,
+	)
+
+	if err != nil {
+		if encodeErr := response.JSON(
+			w,
+			http.StatusUnauthorized,
+			response.ErrorResponse{
+				Error: "invalid refresh token",
+			},
+		); encodeErr != nil {
+			log.Printf("failed to encode response: %v", encodeErr)
+		}
+		return
+	}
+
+	h.clearRefreshCookie(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Helper function to set Cookie
+func (h *UserHandler) setRefreshCookie(w http.ResponseWriter, refreshToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    refreshToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false, //Change to true when in production
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(services.RefreshTokenTTL),
+		MaxAge:   int(services.RefreshTokenTTL.Seconds()),
+	})
+}
+
+// Helper function to clear Cookie
+func (h *UserHandler) clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+}
