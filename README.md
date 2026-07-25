@@ -7,8 +7,6 @@
 
 A high-performance, production-ready **Authentication and Authorization Service** built with Go, PostgreSQL. AuthSphere provides robust JWT-based authentication featuring **stateless short-lived Access Tokens**, **secure HttpOnly cookie-based Refresh Tokens**, blacklisting/revocation support, and role-based protected routes.
 
----
-
 ## 🌟 Key Features
 
 - **User Onboarding & Management**: User registration with hashed password storage (Bcrypt), login, and logout.
@@ -22,23 +20,3 @@ A high-performance, production-ready **Authentication and Authorization Service*
   - Rate limiting on public auth endpoints.
   - CORS and CSRF protections.
 - **Developer-Friendly**: Hot-reloading setup via [Air](https://github.com/air-verse/air), clean architecture, and full Docker Compose support.
-
----
-
-## 🏗️ Architecture Overview
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-Make sure you have the following installed on your machine:
-- [Go 1.22+](https://golang.org/doc/install)
-- [Docker & Docker Compose](https://www.docker.com/)
-- [Air](https://github.com/air-verse/air) (Optional, for hot reloading)
-
-### 1. Clone the Repository
-
-```bash
-git clone [https://github.com/your-username/auth-service.git](https://github.com/your-username/auth-service.git)
-cd auth-service
