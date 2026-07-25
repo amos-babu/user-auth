@@ -26,3 +26,19 @@ A high-performance, production-ready **Authentication and Authorization Service*
 ---
 
 ## 🏗️ Architecture Overview
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+Make sure you have the following installed on your machine:
+- [Go 1.22+](https://golang.org/doc/install)
+- [Docker & Docker Compose](https://www.docker.com/)
+- [Air](https://github.com/air-verse/air) (Optional, for hot reloading)
+
+### 1. Clone the Repository
+
+```bash
+git clone [https://github.com/your-username/auth-service.git](https://github.com/your-username/auth-service.git)
+cd auth-service
